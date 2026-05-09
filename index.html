@@ -1,0 +1,1393 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Spectrum — Audio Visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-0: #07070b;
+    --fg: #ececf0;
+    --fg-dim: #6a6a78;
+    --accent: #ff6e7f;
+    --warn: #ffb86b;
+    --line: rgba(255, 255, 255, 0.08);
+    --serif: 'Instrument Serif', 'Georgia', serif;
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  }
+
+  html, body {
+    height: 100%; width: 100%;
+    background: var(--bg-0);
+    color: var(--fg);
+    font-family: var(--mono);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 35%, rgba(70, 30, 60, 0.35) 0%, transparent 70%),
+      radial-gradient(ellipse 60% 40% at 50% 80%, rgba(20, 40, 70, 0.25) 0%, transparent 70%),
+      var(--bg-0);
+    position: relative;
+  }
+
+  body::after {
+    content: '';
+    position: fixed; inset: -50%;
+    pointer-events: none;
+    opacity: 0.06;
+    mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    z-index: 100;
+  }
+
+#bg {
+  position: fixed;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(0px) brightness(0.5);
+  transition: filter 0.25s ease;
+  pointer-events: none;
+}
+
+#droplets {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  display: none;
+}
+#droplets.show { display: block; }
+
+.mode-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(255, 110, 127, 0.08);
+}
+
+  canvas {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    display: block;
+mix-blend-mode: screen;   /* ← 加這行 */
+  }
+
+  .drop-zone {
+    position: fixed; inset: 0;
+    z-index: 4;
+    transition: background 0.2s ease, outline-offset 0.2s ease;
+    outline: 2px dashed transparent;
+    outline-offset: -20px;
+  }
+  .drop-zone.over {
+    background: rgba(255, 110, 127, 0.06);
+    outline-color: var(--accent);
+    outline-offset: -14px;
+  }
+
+  .ui {
+    position: relative;
+    z-index: 10;
+    height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    pointer-events: none;
+  }
+  .ui > * { pointer-events: auto; }
+
+  header {
+    padding: 22px 24px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .title {
+    font-family: var(--serif);
+    font-size: 32px; font-weight: 400;
+    letter-spacing: -0.01em; line-height: 1;
+  }
+  .title em { font-style: italic; color: var(--accent); margin-right: 2px; }
+  .title .dot { color: var(--accent); }
+
+  .meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    text-align: right;
+    line-height: 1.5;
+  }
+  .meta .pulse {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--fg-dim);
+    margin-right: 6px;
+    vertical-align: 1px;
+    transition: background 0.4s ease;
+  }
+  .meta.live .pulse {
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .meta.warn .pulse { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+  }
+
+  .controls {
+    padding: 16px 22px calc(22px + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap; 
+    background: linear-gradient(to top, rgba(7, 7, 11, 0.85) 30%, transparent);
+  }
+
+  .file-label {
+    position: relative;
+    cursor: pointer;
+    padding: 11px 18px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.03);
+    user-select: none;
+    white-space: nowrap;
+    color: var(--fg);
+    overflow: hidden;
+  }
+  .file-label:hover, .file-label:active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(255, 110, 127, 0.08);
+  }
+  .file-label input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    font-size: 0;
+  }
+
+  .play-btn {
+    width: 44px; height: 44px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0;
+  }
+  .play-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+  .play-btn:not(:disabled):hover, .play-btn:not(:disabled):active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(255, 110, 127, 0.08);
+  }
+  .play-btn svg { width: 14px; height: 14px; }
+
+  .track-info {
+    flex: 1; min-width: 0;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .track-info .name {
+    color: var(--fg);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .track-info .name.warn { color: var(--warn); }
+  .track-info .time { font-variant-numeric: tabular-nums; }
+
+  .hint {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+    z-index: 5;
+  }
+  .hint.hidden { opacity: 0; }
+  .hint-text {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 28px;
+    color: var(--fg);
+    opacity: 0.55;
+  }
+  .hint-sub {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    opacity: 0.5;
+  }
+
+.seek-bar {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  order: -1;             /* 強制排到最上方 */
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  outline: none;
+  margin-bottom: 4px;
+}
+.seek-bar:disabled { opacity: 0.35; cursor: not-allowed; }
+.seek-bar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(255, 110, 127, 0.5);
+  transition: transform 0.15s ease;
+}
+.seek-bar:hover::-webkit-slider-thumb,
+.seek-bar:active::-webkit-slider-thumb { transform: scale(1.3); }
+.seek-bar::-moz-range-thumb {
+  width: 14px; height: 14px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+.vol-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+}
+.vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  background: var(--fg);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.vol-slider:hover::-webkit-slider-thumb,
+.vol-slider:active::-webkit-slider-thumb {
+  background: var(--accent);
+  transform: scale(1.25);
+  box-shadow: 0 0 12px rgba(255, 110, 127, 0.6);
+}
+.vol-slider::-moz-range-thumb {
+  width: 12px; height: 12px;
+  background: var(--fg);
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+}
+
+
+.mode-btn {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+  min-width: 70px;
+}
+.mode-btn:hover, .mode-btn:active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rec-btn {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.rec-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+.rec-btn .rec-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 92, 108, 0.5);
+  transition: all 0.2s ease;
+}
+.rec-btn.recording { border-color: #ff5c6c; color: #ff5c6c; }
+.rec-btn.recording .rec-dot {
+  background: #ff5c6c;
+  box-shadow: 0 0 10px #ff5c6c;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(0.8); }
+}
+
+
+  @media (max-width: 420px) {
+    .title { font-size: 26px; }
+    .meta  { font-size: 9px; }
+    .file-label { padding: 10px 14px; font-size: 10px; }
+    .hint-text { font-size: 22px; }
+    .vol-slider { width: 60px; }
+  }
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<canvas id="droplets"></canvas>
+  <canvas id="viz"></canvas>
+  <div class="drop-zone" id="drop"></div>
+
+  <div class="ui">
+    <header>
+      <h1 class="title"><em>S</em>pectrum<span class="dot">.</span></h1>
+      <div class="meta" id="meta">
+        <span class="pulse"></span><span id="meta-status">IDLE</span><br>
+        FFT &middot; <span id="meta-fft">2048</span>
+      </div>
+    </header>
+    <div></div>
+    <div class="controls">
+<input type="range" class="seek-bar" id="seek" min="0" max="100" step="0.1" value="0" disabled aria-label="Seek">
+      <label class="file-label">
+        Load
+        <input type="file" id="file" accept="audio/*">
+      </label>
+<button class="mode-btn" id="tab-cap">TAB</button>
+<button class="mode-btn" id="mic-cap">MIC</button>
+<label class="file-label">
+  BG
+  <input type="file" id="bg-file" accept="image/*">
+</label>
+<input type="range" class="vol-slider" id="blur" min="0" max="30" step="0.5" value="0" aria-label="Blur">
+<input type="range" class="vol-slider" id="hue" min="-180" max="180" step="1" value="0" aria-label="Hue">
+<input type="range" class="vol-slider" id="sat" min="0" max="2" step="0.05" value="1" aria-label="Saturation">
+<button class="mode-btn" id="drops-toggle">DROPS</button>
+      <button class="play-btn" id="play" disabled aria-label="Play / Pause">
+        <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor"><path id="play-path" d="M8 5v14l11-7z"/></svg>
+      </button>
+<button class="mode-btn" id="mode">BARS</button>
+<button class="mode-btn" id="blend">SCREEN</button>
+
+<input type="range" class="vol-slider" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+<button class="rec-btn" id="rec" disabled><span class="rec-dot"></span>REC</button>
+      <div class="track-info">
+        <span class="name" id="track-name">No track loaded</span>
+        <span class="time" id="track-time">—:—  /  —:—</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint" id="hint">
+    <div class="hint-text">choose or drop a track</div>
+    <div class="hint-sub">tap “load”  &middot;  or drag a file in</div>
+  </div>
+
+  <audio id="audio" preload="auto"></audio>
+
+<script>
+class AudioEngine {
+  constructor(audioElement) {
+    this.audio = audioElement;
+    this.ctx = null;
+    this.analyser = null;
+    this.fileSource = null;
+    this.streamSource = null;
+    this.source = null;
+    this._connected = false;
+    this._mode = null;
+  }
+  ensureCtx() {
+    if (this.ctx) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new Ctx();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 2048;
+    this.analyser.smoothingTimeConstant = 0.78;
+    this.analyser.minDecibels = -85;
+    this.analyser.maxDecibels = -15;
+  }
+  async resume() {
+    if (this.ctx && this.ctx.state === 'suspended') await this.ctx.resume();
+  }
+  _disconnectAll() {
+    if (this.source) { try { this.source.disconnect(); } catch(_) {} }
+    try { this.analyser.disconnect(); } catch(_) {}
+  }
+  connectSource() {
+    this.ensureCtx();
+    this._disconnectAll();
+    if (!this.fileSource) {
+      this.fileSource = this.ctx.createMediaElementSource(this.audio);
+    }
+    this.source = this.fileSource;
+    this.source.connect(this.analyser);
+    this.analyser.connect(this.ctx.destination);
+    this._connected = true;
+    this._mode = 'file';
+  }
+  async connectStream(stream) {
+    this.ensureCtx();
+    await this.resume();
+    this._disconnectAll();
+    this.streamSource = this.ctx.createMediaStreamSource(stream);
+    this.source = this.streamSource;
+    this.source.connect(this.analyser);
+    // 不連 destination：避免分頁音訊雙倍音量、麥克風 feedback
+    this._connected = true;
+    this._mode = 'stream';
+  }
+  get sampleRate() { return this.ctx ? this.ctx.sampleRate : 44100; }
+}
+
+/* SpectrumVisualizer
+   v1 跳動風格 + 60 bars + 壓低 bar 最大高度
+*/
+class SpectrumVisualizer {
+  constructor(canvas, engine) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = engine;
+    this.analyser = engine.analyser;
+    this.bufferLength = this.analyser.frequencyBinCount;
+    this.freqData = new Uint8Array(this.bufferLength);
+
+    this.numBars = 60;
+    this.minFreq = 28;
+    this.maxFreq = 16000;
+
+    this.values = new Float32Array(this.numBars);
+    this.peaks  = new Float32Array(this.numBars);
+
+    // v1 跳動感：上升瞬間、下降稍慢、peak hold
+    this.attackUp  = 1.0;
+    this.releaseDn = 0.88;
+    this.peakDecay = 0.985;
+
+    // 高度壓制：bar 最大高度以畫面比SpectrumVisualizer例計算
+    this.baselineRatio = 0.72;   // baseline 在畫面 72% 處
+    this.maxBarRatio   = 0.38;   // bar 最大高度 = 畫面高度 * 38%
+
+    this.resize = this.resize.bind(this);
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    window.addEventListener('orientationchange', this.resize);
+  }
+
+
+  resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = this.canvas.getBoundingClientRect();
+    this.canvas.width  = Math.floor(rect.width * dpr);
+    this.canvas.height = Math.floor(rect.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = rect.width;
+    this.h = rect.height;
+  }
+
+  freqToBin(freq) {
+    return Math.round(freq * this.analyser.fftSize / this.engine.sampleRate);
+  }
+  binRangeForBar(i) {
+    const t1 = i / this.numBars;
+    const t2 = (i + 1) / this.numBars;
+    const ratio = this.maxFreq / this.minFreq;
+    const f1 = this.minFreq * Math.pow(ratio, t1);
+    const f2 = this.minFreq * Math.pow(ratio, t2);
+    let b1 = Math.max(1, this.freqToBin(f1));
+    let b2 = Math.min(this.bufferLength - 1, this.freqToBin(f2));
+    if (b2 <= b1) b2 = b1 + 1;
+    return [b1, b2];
+  }
+  // v1 配色：寬色相範圍
+  colorForBar(t, intensity) {
+    const hue   = (352 - t * 165 + hueShift + 360) % 360;
+    const sat   = 78 - t * 8;
+    const light = 52 + intensity * 18;
+    return [hue, sat, light];
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.w, h = this.h;
+
+    this.analyser.getByteFrequencyData(this.freqData);
+
+    // v1 風格的殘影 trail
+    ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+
+    const baseY = h * this.baselineRatio;
+    const maxBarH = h * this.maxBarRatio;
+
+    const totalW = w * 0.92;
+    const offsetX = (w - totalW) / 2;
+    const slot = totalW / this.numBars;
+    const gap = Math.max(2, slot * 0.25);
+    const barW = Math.max(2.5, slot - gap);
+
+    // baseline 細線
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.fillRect(offsetX, baseY, totalW, 1);
+
+    for (let i = 0; i < this.numBars; i++) {
+      const [b1, b2] = this.binRangeForBar(i);
+      let v = 0;
+      for (let j = b1; j < b2; j++) {
+        const d = this.freqData[j];
+        if (d > v) v = d;
+      }
+      const t = i / (this.numBars - 1);
+      const boost = 1 + t * 0.55;
+      let target = (v / 255) * boost;
+      if (target > 1) target = 1;
+
+      // 不對稱平滑（v1 風格）
+      if (target > this.values[i]) {
+        this.values[i] = this.values[i] + (target - this.values[i]) * this.attackUp;
+      } else {
+        this.values[i] = this.values[i] * this.releaseDn + target * (1 - this.releaseDn);
+      }
+      if (this.values[i] > this.peaks[i]) this.peaks[i] = this.values[i];
+      else this.peaks[i] *= this.peakDecay;
+
+      const intensity = this.values[i];
+      const barH = Math.max(2, intensity * maxBarH);
+      const x = offsetX + i * slot + gap / 2;
+      const y = baseY - barH;
+      const [hue, sat, light] = this.colorForBar(t, intensity);
+      const radius = Math.min(barW * 0.5, 3);
+
+      const grad = ctx.createLinearGradient(0, baseY, 0, y);
+      grad.addColorStop(0,   `hsla(${hue}, ${sat}%, ${light - 18}%, 0.15)`);
+      grad.addColorStop(0.4, `hsla(${hue}, ${sat}%, ${light - 6}%, 0.85)`);
+      grad.addColorStop(1,   `hsla(${hue}, ${Math.min(sat + 8, 95)}%, ${light + 12}%, 1)`);
+      ctx.fillStyle = grad;
+      ctx.shadowColor = `hsla(${hue}, ${sat}%, ${light + 8}%, 0.55)`;
+      ctx.shadowBlur = 10 + intensity * 14;
+
+      this.roundRect(x, y, barW, barH, radius);
+      ctx.fill();
+
+      // 反射
+      ctx.shadowBlur = 0;
+      const reflH = barH * 0.4;
+      const reflGrad = ctx.createLinearGradient(0, baseY, 0, baseY + reflH);
+      reflGrad.addColorStop(0, `hsla(${hue}, ${sat}%, ${light}%, 0.28)`);
+      reflGrad.addColorStop(1, `hsla(${hue}, ${sat}%, ${light}%, 0)`);
+      ctx.fillStyle = reflGrad;
+      this.roundRect(x, baseY, barW, reflH, radius);
+      ctx.fill();
+
+      // peak hold
+      if (this.peaks[i] > 0.05) {
+        const py = baseY - this.peaks[i] * maxBarH - 2;
+        ctx.fillStyle = `hsla(${hue}, ${sat}%, ${light + 22}%, 0.9)`;
+        ctx.fillRect(x, py, barW, 1.5);
+      }
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  roundRect(x, y, w, h, r) {
+    if (h <= 0 || w <= 0) return;
+    r = Math.min(r, w / 2, h / 2);
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+  }
+}
+
+class RadialVisualizer {
+  constructor(canvas, engine) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = engine;
+    this.analyser = engine.analyser;
+    this.bufferLength = this.analyser.frequencyBinCount;
+    this.freqData = new Uint8Array(this.bufferLength);
+    this.numBars = 96;
+    this.minFreq = 35; this.maxFreq = 14000;
+    this.values = new Float32Array(this.numBars);
+    this.attackUp = 1.0; this.releaseDn = 0.9;
+    this.resize = this.resize.bind(this);
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    window.addEventListener('orientationchange', this.resize);
+  }
+  resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(r.width * dpr);
+    this.canvas.height = Math.floor(r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  draw() {
+    const ctx = this.ctx, w = this.w, h = this.h;
+    this.analyser.getByteFrequencyData(this.freqData);
+    ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+    const cx = w/2, cy = h/2;
+    const minDim = Math.min(w, h);
+    const innerR = minDim * 0.16;
+    const maxLen = minDim * 0.22;
+    const sr = this.engine.sampleRate;
+    const fft = this.analyser.fftSize;
+    const ratio = this.maxFreq / this.minFreq;
+    let avg = 0;
+    for (let i = 0; i < this.numBars; i++) {
+      const t1 = i / this.numBars, t2 = (i+1) / this.numBars;
+      const f1 = this.minFreq * Math.pow(ratio, t1);
+      const f2 = this.minFreq * Math.pow(ratio, t2);
+      let b1 = Math.max(1, Math.round(f1 * fft / sr));
+      let b2 = Math.min(this.bufferLength - 1, Math.round(f2 * fft / sr));
+      if (b2 <= b1) b2 = b1 + 1;
+      let v = 0;
+      for (let j = b1; j < b2; j++) if (this.freqData[j] > v) v = this.freqData[j];
+      const t = i / (this.numBars - 1);
+      let target = Math.min(1, (v / 255) * (1 + t * 0.4));
+      if (target > this.values[i]) this.values[i] += (target - this.values[i]) * this.attackUp;
+      else this.values[i] = this.values[i] * this.releaseDn + target * (1 - this.releaseDn);
+      const intensity = this.values[i];
+      avg += intensity;
+      const len = intensity * maxLen + 2;
+      const angle = (i / this.numBars) * Math.PI * 2 - Math.PI / 2;
+      const x1 = cx + Math.cos(angle) * innerR;
+      const y1 = cy + Math.sin(angle) * innerR;
+      const x2 = cx + Math.cos(angle) * (innerR + len);
+      const y2 = cy + Math.sin(angle) * (innerR + len);
+      const hue = (352 - t * 165 + hueShift + 360) % 360;
+      const sat = 78 - t * 8;
+      const light = 52 + intensity * 18;
+      ctx.strokeStyle = `hsla(${hue}, ${sat}%, ${light}%, ${0.4 + intensity * 0.6})`;
+      ctx.lineWidth = Math.max(2, minDim * 0.005);
+      ctx.lineCap = 'round';
+      ctx.shadowColor = `hsla(${hue}, ${sat}%, ${light + 8}%, 0.5)`;
+      ctx.shadowBlur = 8 + intensity * 12;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    avg /= this.numBars;
+    ctx.beginPath();
+    ctx.arc(cx, cy, innerR * (0.85 + avg * 0.15), 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(340, 50%, 50%, ${0.05 + avg * 0.15})`;
+    ctx.fill();
+    ctx.strokeStyle = `hsla(350, 70%, 60%, ${0.2 + avg * 0.5})`;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+class WaveformVisualizer {
+  constructor(canvas, engine) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = engine;
+    this.analyser = engine.analyser;
+    this.timeData = new Uint8Array(this.analyser.fftSize);
+    this.resize = this.resize.bind(this);
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    window.addEventListener('orientationchange', this.resize);
+  }
+  resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(r.width * dpr);
+    this.canvas.height = Math.floor(r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  draw() {
+    const ctx = this.ctx, w = this.w, h = this.h;
+    this.analyser.getByteTimeDomainData(this.timeData);
+    ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+    const cy = h / 2;
+    const amp = h * 0.32;
+    const len = this.timeData.length;
+    const sliceW = w / (len - 1);
+    ctx.beginPath();
+    let x = 0;
+    for (let i = 0; i < len; i++) {
+      const v = (this.timeData[i] - 128) / 128;
+      const y = cy + v * amp;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+      x += sliceW;
+    }
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `hsla(${(350+hueShift+360)%360}, 80%, 65%, 0.7)`;
+    ctx.shadowColor = `hsla(${(330+hueShift+360)%360}, 80%, 60%, 0.7)`;
+    ctx.shadowBlur = 16;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = `hsla(${(340+hueShift+360)%360}, 90%, 80%, 1)`;
+    ctx.stroke();
+  }
+}
+
+class ParticleVisualizer {
+  constructor(canvas, engine) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = engine;
+    this.analyser = engine.analyser;
+    this.bufferLength = this.analyser.frequencyBinCount;
+    this.freqData = new Uint8Array(this.bufferLength);
+    this.particles = [];
+    this.bassSmooth = 0;
+    this.bassEnv = 0;
+    this.resize = this.resize.bind(this);
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    window.addEventListener('orientationchange', this.resize);
+  }
+  resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(r.width * dpr);
+    this.canvas.height = Math.floor(r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  draw() {
+    const ctx = this.ctx, w = this.w, h = this.h;
+    this.analyser.getByteFrequencyData(this.freqData);
+    ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+    let bass = 0;
+    for (let i = 1; i < 6; i++) bass += this.freqData[i];
+    bass = (bass / 5) / 255;
+    this.bassSmooth = this.bassSmooth * 0.92 + bass * 0.08;
+    this.bassEnv = Math.max(this.bassEnv * 0.96, bass);
+    const isHit = bass > this.bassSmooth * 1.3 && bass > 0.4;
+    if (isHit) {
+      const n = 6 + Math.floor(bass * 12);
+      for (let i = 0; i < n; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = (1.5 + Math.random() * 4) * (0.6 + bass * 0.8);
+        this.particles.push({
+          x: w/2 + (Math.random()-0.5)*40,
+          y: h/2 + (Math.random()-0.5)*40,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          size: 1.5 + Math.random() * 2.5,
+          hue: (340 + Math.random()*40 - 20 + hueShift + 360) % 360,
+        });
+      }
+    }
+    for (const p of this.particles) {
+      p.x += p.vx; p.y += p.vy;
+      p.vy += 0.04; p.vx *= 0.992;
+      p.life -= 0.01;
+      const a = Math.max(0, p.life);
+      ctx.fillStyle = `hsla(${p.hue}, 80%, 65%, ${a})`;
+      ctx.shadowColor = `hsla(${p.hue}, 80%, 65%, ${a * 0.8})`;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * (0.5 + a * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    this.particles = this.particles.filter(p => p.life > 0 && p.y < h + 20);
+    const r = 30 + this.bassEnv * 60;
+    const grad = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, r);
+    grad.addColorStop(0, `hsla(340, 80%, 60%, ${this.bassEnv * 0.4})`);
+    grad.addColorStop(1, 'hsla(340, 80%, 60%, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(w/2 - r, h/2 - r, r*2, r*2);
+  }
+}
+
+class RainVisualizer {
+  constructor(canvas, engine) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.engine = engine;
+    this.analyser = engine.analyser;
+    this.bufferLength = this.analyser.frequencyBinCount;
+    this.freqData = new Uint8Array(this.bufferLength);
+    this.drops = [];
+    this.numCols = 60;
+    this.minFreq = 35; this.maxFreq = 14000;
+    this.resize = this.resize.bind(this);
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    window.addEventListener('orientationchange', this.resize);
+  }
+  resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = this.canvas.getBoundingClientRect();
+    this.canvas.width = Math.floor(r.width * dpr);
+    this.canvas.height = Math.floor(r.height * dpr);
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.w = r.width; this.h = r.height;
+  }
+  draw() {
+    const ctx = this.ctx, w = this.w, h = this.h;
+    this.analyser.getByteFrequencyData(this.freqData);
+    ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+    const sr = this.engine.sampleRate;
+    const fft = this.analyser.fftSize;
+    const ratio = this.maxFreq / this.minFreq;
+    for (let i = 0; i < this.numCols; i++) {
+      const t1 = i / this.numCols, t2 = (i+1) / this.numCols;
+      const f1 = this.minFreq * Math.pow(ratio, t1);
+      const f2 = this.minFreq * Math.pow(ratio, t2);
+      let b1 = Math.max(1, Math.round(f1 * fft / sr));
+      let b2 = Math.min(this.bufferLength - 1, Math.round(f2 * fft / sr));
+      if (b2 <= b1) b2 = b1 + 1;
+      let v = 0;
+      for (let j = b1; j < b2; j++) if (this.freqData[j] > v) v = this.freqData[j];
+      const intensity = (v / 255) * (1 + t1 * 0.3);
+      if (intensity > 0.45 && Math.random() < intensity * 0.35) {
+        this.drops.push({
+          x: (i + 0.5) / this.numCols * w,
+          y: -10,
+          vy: 2 + Math.random() * 4 + intensity * 5,
+          len: 14 + intensity * 60,
+          width: 1.5 + Math.random() * 1.5,
+          hue: (200 + Math.random()*20 + hueShift + 360) % 360,
+          alpha: 0.2 + intensity * 0.35,
+        });
+      }
+    }
+    for (const d of this.drops) {
+  d.y += d.vy;
+  const grad = ctx.createLinearGradient(d.x, d.y, d.x, d.y - d.len);
+  grad.addColorStop(0, `hsla(${d.hue}, 30%, 88%, ${d.alpha})`);
+  grad.addColorStop(1, `hsla(${d.hue}, 80%, 70%, 0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(d.x - d.width/2, d.y - d.len, d.width, d.len);
+}
+this.drops = this.drops.filter(d => d.y - d.len < h + 20);
+if (this.drops.length > 400) this.drops.splice(0, this.drops.length - 400);
+  }
+}
+
+/* idle background */
+function drawIdle(ctx, w, h, t) {
+  ctx.save();
+ctx.globalCompositeOperation = 'destination-out';
+ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+ctx.fillRect(0, 0, w, h);
+ctx.restore();
+  const baseY = h * 0.72;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.fillRect(w * 0.04, baseY, w * 0.92, 1);
+
+  const numBars = 60;
+  const totalW = w * 0.92;
+  const offsetX = (w - totalW) / 2;
+  const slot = totalW / numBars;
+  const gap = Math.max(2, slot * 0.25);
+  const barW = Math.max(2.5, slot - gap);
+  for (let i = 0; i < numBars; i++) {
+    const phase = (i / numBars) * Math.PI * 4 + t * 0.0008;
+    const amp = (Math.sin(phase) * 0.5 + 0.5) * 0.04 + 0.015;
+    const barH = amp * (h * 0.38);
+    const x = offsetX + i * slot + gap / 2;
+    const y = baseY - barH;
+    const tt = i / (numBars - 1);
+    const hue = 352 - tt * 165;
+    ctx.fillStyle = `hsla(${hue}, 55%, 45%, 0.35)`;
+    ctx.fillRect(x, y, barW, barH);
+  }
+}
+
+/* App */
+const audio     = document.getElementById('audio');
+const canvas    = document.getElementById('viz');
+const fileInput = document.getElementById('file');
+const playBtn   = document.getElementById('play');
+const playPath  = document.getElementById('play-path');
+const trackName = document.getElementById('track-name');
+const trackTime = document.getElementById('track-time');
+const hint      = document.getElementById('hint');
+const meta      = document.getElementById('meta');
+const metaStatus= document.getElementById('meta-status');
+const metaFft   = document.getElementById('meta-fft');
+const dropZone  = document.getElementById('drop');
+
+const PLAY_D  = 'M8 5v14l11-7z';
+const PAUSE_D = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
+const engine = new AudioEngine(audio);
+const visualizers = {};
+let mode = 'bars';
+const MODES = ['bars', 'radial', 'wave', 'burst', 'rain'];
+const MODE_LABELS = { bars: 'BARS', radial: 'RADIAL', wave: 'WAVE', burst: 'BURST', rain: 'RAIN' };
+const VIZ_CLASSES = { bars: SpectrumVisualizer, radial: RadialVisualizer, wave: WaveformVisualizer, burst: ParticleVisualizer, rain: RainVisualizer };
+function getViz() {
+  if (!visualizers[mode]) visualizers[mode] = new VIZ_CLASSES[mode](canvas, engine);
+  return visualizers[mode];
+}
+let raf = null;
+let idleStart = performance.now();
+
+function fmtTime(s) {
+  if (!isFinite(s) || s < 0) return '—:—';
+  const m  = Math.floor(s / 60);
+  const ss = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${ss}`;
+}
+function setStatus(text, mode='idle') {
+  metaStatus.textContent = text;
+  meta.classList.remove('live', 'warn');
+  if (mode !== 'idle') meta.classList.add(mode);
+}
+function setPlayingUI(playing) {
+  playPath.setAttribute('d', playing ? PAUSE_D : PLAY_D);
+  setStatus(playing ? 'LIVE' : 'PAUSED', playing ? 'live' : 'idle');
+}
+
+function initCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();
+  canvas.width  = Math.floor(r.width * dpr);
+  canvas.height = Math.floor(r.height * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function tick() {
+  const ctx2d = canvas.getContext('2d');
+  const r = canvas.getBoundingClientRect();
+  if (engine._connected) getViz().draw();
+  else     drawIdle(ctx2d, r.width, r.height, performance.now() - idleStart);
+  raf = requestAnimationFrame(tick);
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  engine.ensureCtx();
+
+  trackName.classList.remove('warn');
+  trackName.textContent = file.name;
+  hint.classList.add('hidden');
+  setStatus('LOADING', 'warn');
+
+  if (audio.src && audio.src.startsWith('blob:')) {
+    try { URL.revokeObjectURL(audio.src); } catch(_) {}
+  }
+  audio.src = URL.createObjectURL(file);
+
+  const onReady = async () => {
+    audio.removeEventListener('canplay', onReady);
+    engine.connectSource();
+    metaFft.textContent = engine.analyser.fftSize;
+    playBtn.disabled = false;
+    recBtn.disabled = false;
+    await engine.resume();
+    audio.play().catch((err) => {
+      trackName.textContent = 'Play blocked: ' + err.message;
+      trackName.classList.add('warn');
+      setStatus('BLOCKED', 'warn');
+    });
+  };
+  audio.addEventListener('canplay', onReady);
+  audio.addEventListener('error', () => {
+    const e = audio.error;
+    trackName.textContent = 'Audio error: ' + (e ? `code ${e.code}` : 'unknown');
+    trackName.classList.add('warn');
+    setStatus('ERROR', 'warn');
+  }, { once: true });
+}
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) handleFile(file);
+});
+
+['dragenter','dragover'].forEach(ev => {
+  dropZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.add('over'); });
+});
+['dragleave','dragend'].forEach(ev => {
+  dropZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('over'); });
+});
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  dropZone.classList.remove('over');
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop',     (e) => e.preventDefault());
+
+playBtn.addEventListener('click', async () => {
+  if (!audio.src) return;
+  await engine.resume();
+  if (audio.paused) audio.play();
+  else              audio.pause();
+});
+
+const volSlider = document.getElementById('vol');
+volSlider.addEventListener('input', (e) => {
+  audio.volume = parseFloat(e.target.value);
+});
+
+const bgFile = document.getElementById('bg-file');
+const bgEl = document.getElementById('bg');
+const blurSlider = document.getElementById('blur');
+
+bgFile.addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (bgEl.dataset.url) URL.revokeObjectURL(bgEl.dataset.url);
+  const url = URL.createObjectURL(file);
+  bgEl.dataset.url = url;
+  bgEl.style.backgroundImage = `url("${url}")`;
+
+  bgImage = new Image();
+  bgImage.onload = () => {
+    if (dropsCanvas.classList.contains('show')) generateDroplets();
+  };
+  bgImage.src = url;
+});
+
+blurSlider.addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  bgEl.style.filter = `blur(${v}px) brightness(0.8)`;
+});
+
+let hueShift = 0;
+const hueSlider = document.getElementById('hue');
+hueSlider.addEventListener('input', (e) => {
+  hueShift = parseFloat(e.target.value);
+});
+const satSlider = document.getElementById('sat');
+satSlider.addEventListener('input', (e) => {
+  canvas.style.filter = `saturate(${e.target.value})`;
+});
+
+const dropsCanvas = document.getElementById('droplets');
+const dropsToggle = document.getElementById('drops-toggle');
+const dropsCtx = dropsCanvas.getContext('2d');
+
+let bgImage = null;
+
+function drawCover(ctx, img, dw, dh) {
+  if (!img || !img.complete) return;
+  const ir = img.width / img.height;
+  const dr = dw / dh;
+  let sx, sy, sw, sh;
+  if (ir > dr) { sh = img.height; sw = sh * dr; sx = (img.width - sw) / 2; sy = 0; }
+  else         { sw = img.width;  sh = sw / dr; sx = 0; sy = (img.height - sh) / 2; }
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+}
+
+function generateDroplets() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = dropsCanvas.getBoundingClientRect();
+  dropsCanvas.width  = Math.floor(rect.width * dpr);
+  dropsCanvas.height = Math.floor(rect.height * dpr);
+  dropsCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = rect.width, h = rect.height;
+
+  const drops = [];
+  for (let i = 0; i < 30; i++)  drops.push({ x: Math.random()*w, y: Math.random()*h, r: 9 + Math.random()*18 });
+  for (let i = 0; i < 110; i++) drops.push({ x: Math.random()*w, y: Math.random()*h, r: 2.5 + Math.random()*5 });
+
+  dropsCtx.clearRect(0, 0, w, h);
+
+  // 1. 在水珠位置畫實心圓（任意顏色當遮罩）
+  dropsCtx.fillStyle = '#fff';
+  for (const d of drops) {
+    dropsCtx.beginPath();
+    dropsCtx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+    dropsCtx.fill();
+  }
+
+  // 2. source-in: 接下來畫的只會出現在「水珠」這些區域
+  if (bgImage && bgImage.complete) {
+    dropsCtx.globalCompositeOperation = 'source-in';
+    drawCover(dropsCtx, bgImage, w, h);
+  }
+
+  // 3. 重置混合模式
+  dropsCtx.globalCompositeOperation = 'source-over';
+
+  // 4. 每個水珠加邊緣暗環 + 強高光 + 底部反光
+  for (const d of drops) {
+    const edge = dropsCtx.createRadialGradient(d.x, d.y, d.r * 0.55, d.x, d.y, d.r);
+    edge.addColorStop(0,    'rgba(0, 0, 0, 0)');
+    edge.addColorStop(0.65, 'rgba(0, 0, 0, 0.12)');
+    edge.addColorStop(0.95, 'rgba(0, 0, 0, 0.55)');
+    edge.addColorStop(1,    'rgba(255, 255, 255, 0.5)');
+    dropsCtx.fillStyle = edge;
+    dropsCtx.beginPath();
+    dropsCtx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+    dropsCtx.fill();
+
+    dropsCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    dropsCtx.beginPath();
+    dropsCtx.arc(d.x - d.r * 0.35, d.y - d.r * 0.4, d.r * 0.18, 0, Math.PI * 2);
+    dropsCtx.fill();
+
+    dropsCtx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+    dropsCtx.beginPath();
+    dropsCtx.arc(d.x + d.r * 0.32, d.y + d.r * 0.38, d.r * 0.13, 0, Math.PI * 2);
+    dropsCtx.fill();
+  }
+}
+
+dropsToggle.addEventListener('click', () => {
+  const on = dropsCanvas.classList.toggle('show');
+  dropsToggle.classList.toggle('active', on);
+  if (on) generateDroplets();
+});
+
+window.addEventListener('resize', () => {
+  if (dropsCanvas.classList.contains('show')) generateDroplets();
+});
+
+const modeBtn = document.getElementById('mode');
+modeBtn.addEventListener('click', () => {
+  const idx = MODES.indexOf(mode);
+  mode = MODES[(idx + 1) % MODES.length];
+  modeBtn.textContent = MODE_LABELS[mode];
+});
+const BLEND_MODES = ['screen', 'overlay', 'soft-light'];
+const BLEND_LABELS = ['SCREEN', 'OVERLAY', 'SOFT'];
+let blendIdx = 0;
+const blendBtn = document.getElementById('blend');
+blendBtn.addEventListener('click', () => {
+  blendIdx = (blendIdx + 1) % BLEND_MODES.length;
+  canvas.style.mixBlendMode = BLEND_MODES[blendIdx];
+  blendBtn.textContent = BLEND_LABELS[blendIdx];
+});
+
+const tabBtn = document.getElementById('tab-cap');
+const micBtn = document.getElementById('mic-cap');
+
+async function startStream(stream, label) {
+  await engine.connectStream(stream);
+  trackName.classList.remove('warn');
+  trackName.textContent = label;
+  hint.classList.add('hidden');
+  setStatus('LIVE', 'live');
+  playBtn.disabled = true;       // 即時模式沒辦法 play/pause
+  recBtn.disabled = false;
+  // 監聽 stream 結束（使用者停止分享）
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => {
+      setStatus('IDLE', 'idle');
+      trackName.textContent = 'Live ended';
+      engine._connected = false;
+    };
+  });
+}
+
+tabBtn.addEventListener('click', async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    alert('此瀏覽器不支援分頁音訊抓取（手機/iOS 不行）。請用桌面 Chrome/Edge。');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: true,
+    });
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) {
+      alert('沒抓到音訊。請在分享對話框內勾選「分享分頁音訊」/「Share tab audio」。');
+      stream.getTracks().forEach(t => t.stop());
+      return;
+    }
+    stream.getVideoTracks().forEach(t => t.stop());
+    await startStream(new MediaStream(audioTracks), 'Live · Tab Audio');
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') alert('Tab capture failed: ' + err.message);
+  }
+});
+
+micBtn.addEventListener('click', async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    await startStream(stream, 'Live · Microphone');
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') alert('Mic capture failed: ' + err.message);
+  }
+});
+
+const seekBar = document.getElementById('seek');
+let seeking = false;
+
+function updateSeekBg() {
+  const pct = seekBar.value;
+  seekBar.style.background = `linear-gradient(to right, var(--accent) 0%, var(--accent) ${pct}%, rgba(255, 255, 255, 0.1) ${pct}%, rgba(255, 255, 255, 0.1) 100%)`;
+}
+
+seekBar.addEventListener('input', () => {
+  seeking = true;
+  updateSeekBg();
+});
+seekBar.addEventListener('change', () => {
+  if (audio.duration) audio.currentTime = (seekBar.value / 100) * audio.duration;
+  seeking = false;
+});
+
+const recBtn = document.getElementById('rec');
+let recorder = null;
+let recChunks = [];
+let recStreamDest = null;
+
+recBtn.addEventListener('click', () => {
+  if (!engine._connected) return;
+  if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+
+  if (!recStreamDest) {
+    recStreamDest = engine.ctx.createMediaStreamDestination();
+    engine.analyser.connect(recStreamDest);
+  }
+  const videoStream = canvas.captureStream(60);
+  const combined = new MediaStream([
+    ...videoStream.getVideoTracks(),
+    ...recStreamDest.stream.getAudioTracks(),
+  ]);
+  const types = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+
+  recChunks = [];
+  recorder = new MediaRecorder(combined, mime ? { mimeType: mime } : undefined);
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const blob = new Blob(recChunks, { type: mime || 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `spectrum-${Date.now()}.webm`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    recBtn.classList.remove('recording');
+    recBtn.innerHTML = '<span class="rec-dot"></span>REC';
+  };
+  recorder.start();
+  recBtn.classList.add('recording');
+  recBtn.innerHTML = '<span class="rec-dot"></span>STOP';
+});
+
+audio.addEventListener('play',  () => setPlayingUI(true));
+audio.addEventListener('pause', () => setPlayingUI(false));
+audio.addEventListener('ended', () => setPlayingUI(false));
+audio.addEventListener('timeupdate', () => {
+  trackTime.textContent =
+    `${fmtTime(audio.currentTime)}  /  ${fmtTime(audio.duration)}`;
+if (!seeking && audio.duration) {
+    seekBar.value = (audio.currentTime / audio.duration) * 100;
+    updateSeekBg();
+  }
+});
+audio.addEventListener('loadedmetadata', () => {
+  trackTime.textContent = `0:00  /  ${fmtTime(audio.duration)}`;
+seekBar.disabled = false;
+  seekBar.value = 0;
+  updateSeekBg();
+});
+
+initCanvas();
+window.addEventListener('resize', initCanvas);
+tick();
+</script>
+</body>
+</html>
