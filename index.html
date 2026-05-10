@@ -384,6 +384,52 @@ mix-blend-mode: screen;   /* ← 加這行 */
   box-shadow: 0 0 10px #ff5c6c;
   animation: rec-pulse 1.2s ease-in-out infinite;
 }
+.ui-toggle {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 50;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(7, 7, 11, 0.6);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--fg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ui-toggle:hover, .ui-toggle:active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ui-toggle svg {
+  width: 14px; height: 14px;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ui-toggle.flipped svg { transform: rotate(180deg); }
+
+/* 給 toggle 按鈕在 header 右側留位 */
+header { padding-right: 64px; }
+
+header, .controls {
+  transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.ui.hidden header {
+  opacity: 0;
+  transform: translateY(-10px);
+  pointer-events: none;
+}
+.ui.hidden .controls {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+}
+
 @keyframes rec-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.5; transform: scale(0.8); }
@@ -429,12 +475,14 @@ mix-blend-mode: screen;   /* ← 加這行 */
 <input type="range" class="vol-slider" id="blur" min="0" max="30" step="0.5" value="0" aria-label="Blur">
 <input type="range" class="vol-slider" id="hue" min="-180" max="180" step="1" value="0" aria-label="Hue">
 <input type="range" class="vol-slider" id="sat" min="0" max="2" step="0.05" value="1" aria-label="Saturation">
+<input type="range" class="vol-slider" id="adapt" min="0" max="1" step="0.02" value="0.5" aria-label="Adapt">
 <button class="mode-btn" id="drops-toggle">DROPS</button>
       <button class="play-btn" id="play" disabled aria-label="Play / Pause">
         <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor"><path id="play-path" d="M8 5v14l11-7z"/></svg>
       </button>
 <button class="mode-btn" id="mode">BARS</button>
 <button class="mode-btn" id="blend">SCREEN</button>
+<button class="mode-btn" id="focus">FOCUS</button>
 
 <input type="range" class="vol-slider" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
 <button class="rec-btn" id="rec" disabled><span class="rec-dot"></span>REC</button>
@@ -451,7 +499,11 @@ mix-blend-mode: screen;   /* ← 加這行 */
   </div>
 
   <audio id="audio" preload="auto"></audio>
-
+<button class="ui-toggle" id="ui-toggle" aria-label="Toggle UI">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 15l6-6 6 6"/>
+  </svg>
+</button>
 <script>
 class AudioEngine {
   constructor(audioElement) {
@@ -467,10 +519,10 @@ class AudioEngine {
   ensureCtx() {
     if (this.ctx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
-    this.ctx = new Ctx();
+    this.ctx = new Ctx({ latencyHint: 'interactive' });
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.78;
+    this.analyser.smoothingTimeConstant = 0.85;
     this.analyser.minDecibels = -85;
     this.analyser.maxDecibels = -15;
   }
@@ -525,6 +577,16 @@ class SpectrumVisualizer {
 
     this.values = new Float32Array(this.numBars);
     this.peaks  = new Float32Array(this.numBars);
+this.envelope = new Float32Array(this.numBars);  // 每個 bar 的動態天花板（AGC）
+this.slowAvg  = new Float32Array(this.numBars);  // 慢速平均，用來算 transient
+this.rms      = 0;                                // 整體能量平滑值
+
+this.envDecay = 0.997;   // envelope 衰減速度，越接近 1 越「黏」
+this.slowMix  = 0.06;    // 慢速平均更新速度
+this.adapt    = 0.5;     // A 的混合：0=純絕對 / 1=純相對
+this.punch    = 0.35;    // B 的 transient 加成強度
+this.noiseFloor  = 0.10;   // 底噪門檻：raw 低於這個就當作 0
+this.transThresh = 0.15;   // transient 要超過 slowAvg 多少才觸發
 
     // v1 跳動感：上升瞬間、下降稍慢、peak hold
     this.attackUp  = 1.0;
@@ -534,6 +596,10 @@ class SpectrumVisualizer {
     // 高度壓制：bar 最大高度以畫面比SpectrumVisualizer例計算
     this.baselineRatio = 0.72;   // baseline 在畫面 72% 處
     this.maxBarRatio   = 0.38;   // bar 最大高度 = 畫面高度 * 38%
+
+this.focus = false;                              // FOCUS 模式開關
+this.bgAvg = new Float32Array(this.numBars);     // 長期背景平均
+this.bgMix = 0.015;                              // 約 1–2 秒記憶（比 slowAvg 慢很多）
 
     this.resize = this.resize.bind(this);
     this.resize();
@@ -579,6 +645,7 @@ class SpectrumVisualizer {
     const w = this.w, h = this.h;
 
     this.analyser.getByteFrequencyData(this.freqData);
+let energySum = 0;
 
     // v1 風格的殘影 trail
     ctx.save();
@@ -597,27 +664,72 @@ ctx.restore();
     const barW = Math.max(2.5, slot - gap);
 
     // baseline 細線
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
-    ctx.fillRect(offsetX, baseY, totalW, 1);
+    // baseline 整體 glow（畫在 bars 後面，跟著 RMS 呼吸）
+const glowR = Math.max(w, h) * 0.55;
+const grad = ctx.createRadialGradient(w / 2, baseY, 0, w / 2, baseY, glowR);
+grad.addColorStop(0, `hsla(${(345 + hueShift + 360) % 360}, 70%, 55%, ${this.rms * 0.22})`);
+grad.addColorStop(1, 'hsla(345, 70%, 55%, 0)');
+ctx.fillStyle = grad;
+ctx.fillRect(0, 0, w, h);
+
+// baseline 線本身也跟著亮
+const lineAlpha = 0.06 + this.rms * 0.35;
+ctx.fillStyle = `hsla(${(350 + hueShift + 360) % 360}, 80%, 70%, ${lineAlpha})`;
+ctx.shadowColor = `hsla(${(345 + hueShift + 360) % 360}, 80%, 60%, 0.7)`;
+ctx.shadowBlur = 6 + this.rms * 24;
+ctx.fillRect(offsetX, baseY - 0.5, totalW, 1.5);
+ctx.shadowBlur = 0;
 
     for (let i = 0; i < this.numBars; i++) {
       const [b1, b2] = this.binRangeForBar(i);
-      let v = 0;
-      for (let j = b1; j < b2; j++) {
-        const d = this.freqData[j];
-        if (d > v) v = d;
-      }
+      let max = 0, sum = 0;
+const n = b2 - b1;
+for (let j = b1; j < b2; j++) {
+  const d = this.freqData[j];
+  sum += d;
+  if (d > max) max = d;
+}
+const v = max * 0.35 + (sum / n) * 0.65;
       const t = i / (this.numBars - 1);
-      const boost = 1 + t * 0.55;
-      let target = (v / 255) * boost;
-      if (target > 1) target = 1;
+      const boost = 1 + t * 0.35;
+let raw = (v / 255) * boost;
+if (raw > 1) raw = 1;
+energySum += raw;
 
-      // 不對稱平滑（v1 風格）
-      if (target > this.values[i]) {
-        this.values[i] = this.values[i] + (target - this.values[i]) * this.attackUp;
-      } else {
-        this.values[i] = this.values[i] * this.releaseDn + target * (1 - this.releaseDn);
-      }
+// 0. noise gate
+const gated = raw < this.noiseFloor
+  ? 0
+  : (raw - this.noiseFloor) / (1 - this.noiseFloor);
+
+// A. envelope follower
+this.envelope[i] = Math.max(this.envelope[i] * this.envDecay, gated);
+const normalized = gated / Math.max(this.envelope[i], 0.15);
+
+// B. transient
+this.slowAvg[i] = this.slowAvg[i] * (1 - this.slowMix) + gated * this.slowMix;
+const tDelta = gated - this.slowAvg[i];
+const transient = tDelta > this.transThresh
+  ? (tDelta - this.transThresh) * this.punch
+  : 0;
+
+// C. 長期背景平均（FOCUS mode 用）
+this.bgAvg[i] = this.bgAvg[i] * (1 - this.bgMix) + gated * this.bgMix;
+
+// 目標值計算
+let target;
+if (this.focus) {
+  const novelty = Math.max(0, gated - this.bgAvg[i]) * 1.8;
+  target = Math.min(1.2, novelty + transient);
+} else {
+  const adapted = gated * (1 - this.adapt) + normalized * this.adapt;
+  target = Math.min(1.2, adapted + transient);
+}
+// 原本的不對稱平滑保留
+if (target > this.values[i]) {
+  this.values[i] = this.values[i] + (target - this.values[i]) * this.attackUp;
+} else {
+  this.values[i] = this.values[i] * this.releaseDn + target * (1 - this.releaseDn);
+}
       if (this.values[i] > this.peaks[i]) this.peaks[i] = this.values[i];
       else this.peaks[i] *= this.peakDecay;
 
@@ -656,6 +768,8 @@ ctx.restore();
         ctx.fillRect(x, py, barW, 1.5);
       }
     }
+const rmsNow = energySum / this.numBars;
+this.rms = this.rms * 0.85 + rmsNow * 0.15;
     ctx.shadowBlur = 0;
   }
 
@@ -903,7 +1017,10 @@ class RainVisualizer {
     this.bufferLength = this.analyser.frequencyBinCount;
     this.freqData = new Uint8Array(this.bufferLength);
     this.drops = [];
-    this.numCols = 60;
+this.numCols = 60;
+this.colSlowAvg = new Float32Array(this.numCols);
+this.cooldown = new Float32Array(this.numCols);
+this.transThresh = 0.10;
     this.minFreq = 35; this.maxFreq = 14000;
     this.resize = this.resize.bind(this);
     this.resize();
@@ -939,17 +1056,26 @@ ctx.restore();
       let v = 0;
       for (let j = b1; j < b2; j++) if (this.freqData[j] > v) v = this.freqData[j];
       const intensity = (v / 255) * (1 + t1 * 0.3);
-      if (intensity > 0.45 && Math.random() < intensity * 0.35) {
-        this.drops.push({
-          x: (i + 0.5) / this.numCols * w,
-          y: -10,
-          vy: 2 + Math.random() * 4 + intensity * 5,
-          len: 14 + intensity * 60,
-          width: 1.5 + Math.random() * 1.5,
-          hue: (200 + Math.random()*20 + hueShift + 360) % 360,
-          alpha: 0.2 + intensity * 0.35,
-        });
-      }
+
+// 每個 column 自己的 transient 偵測
+this.colSlowAvg[i] = this.colSlowAvg[i] * 0.96 + intensity * 0.04;
+const delta = intensity - this.colSlowAvg[i];
+if (this.cooldown[i] > 0) this.cooldown[i] -= 1;
+
+// 只在突然爆發、且不在冷卻期才下雨
+if (delta > this.transThresh && this.cooldown[i] <= 0) {
+  const punch = Math.min(1, delta * 3);
+  this.drops.push({
+    x: (i + 0.5) / this.numCols * w,
+    y: -10,
+    vy: 2 + Math.random() * 4 + punch * 5,
+    len: 14 + punch * 60,
+    width: 1.5 + Math.random() * 1.5,
+    hue: (200 + Math.random()*20 + hueShift + 360) % 360,
+    alpha: 0.2 + punch * 0.45,
+  });
+  this.cooldown[i] = 6 + Math.random() * 6;
+}
     }
     for (const d of this.drops) {
   d.y += d.vy;
@@ -1017,6 +1143,8 @@ let mode = 'bars';
 const MODES = ['bars', 'radial', 'wave', 'burst', 'rain'];
 const MODE_LABELS = { bars: 'BARS', radial: 'RADIAL', wave: 'WAVE', burst: 'BURST', rain: 'RAIN' };
 const VIZ_CLASSES = { bars: SpectrumVisualizer, radial: RadialVisualizer, wave: WaveformVisualizer, burst: ParticleVisualizer, rain: RainVisualizer };
+
+
 function getViz() {
   if (!visualizers[mode]) visualizers[mode] = new VIZ_CLASSES[mode](canvas, engine);
   return visualizers[mode];
@@ -1159,6 +1287,12 @@ satSlider.addEventListener('input', (e) => {
   canvas.style.filter = `saturate(${e.target.value})`;
 });
 
+const adaptSlider = document.getElementById('adapt');
+adaptSlider.addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  if (visualizers.bars) visualizers.bars.adapt = v;
+});
+
 const dropsCanvas = document.getElementById('droplets');
 const dropsToggle = document.getElementById('drops-toggle');
 const dropsCtx = dropsCanvas.getContext('2d');
@@ -1240,6 +1374,14 @@ window.addEventListener('resize', () => {
   if (dropsCanvas.classList.contains('show')) generateDroplets();
 });
 
+const focusBtn = document.getElementById('focus');
+focusBtn.addEventListener('click', () => {
+  if (visualizers.bars) {
+    visualizers.bars.focus = !visualizers.bars.focus;
+    focusBtn.classList.toggle('active', visualizers.bars.focus);
+  }
+});
+
 const modeBtn = document.getElementById('mode');
 modeBtn.addEventListener('click', () => {
   const idx = MODES.indexOf(mode);
@@ -1284,8 +1426,13 @@ tabBtn.addEventListener('click', async () => {
   }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true, audio: true,
-    });
+  video: true,
+  audio: {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  },
+});
     const audioTracks = stream.getAudioTracks();
     if (audioTracks.length === 0) {
       alert('沒抓到音訊。請在分享對話框內勾選「分享分頁音訊」/「Share tab audio」。');
@@ -1387,6 +1534,14 @@ seekBar.disabled = false;
 
 initCanvas();
 window.addEventListener('resize', initCanvas);
+
+const uiEl = document.querySelector('.ui');
+const uiToggle = document.getElementById('ui-toggle');
+uiToggle.addEventListener('click', () => {
+  uiEl.classList.toggle('hidden');
+  uiToggle.classList.toggle('flipped');
+});
+
 tick();
 </script>
 </body>
